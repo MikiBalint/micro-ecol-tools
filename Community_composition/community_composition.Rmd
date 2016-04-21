@@ -7,7 +7,7 @@ bibliography: community_composition.bib
 ---
 
 
-## Initial steps: read in the data, and check that it is sane
+## Initial steps: read in the data, and check that it is sane.
 
 The data is 454-sequenced ITS counts of fungal pathogens from a data set about the global distribution of soil fungi (@tedersoo_global_2014).
 

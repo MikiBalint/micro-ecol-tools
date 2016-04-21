@@ -1,0 +1,188 @@
+---
+title: "Community Composition"
+author: "Bob O'Hara"
+date: '`r format(Sys.time(), "%d %B, %Y")`'
+output: word_document
+bibliography: community_composition.bib
+---
+
+## Initial steps: read in the data, and check that it is sane
+
+The data is 454-sequenced ITS counts of fungal pathogens from a data set about the global distribution of soil fungi (@tedersoo_global_2014).
+
+We start off by reading in the data
+
+```{r Setup, message=FALSE}
+library(vegan)
+library(mvabund)
+library(boral)
+library(corrplot)
+
+## OTU matrix
+Abund = read.csv("Tedersoo_etal_ABUNDANCES_plant_pathogens.csv", header=T, row.names=1)
+## OTU annotations
+Otu = read.csv("Tedersoo_etal_OTUs_plant_pathogens.csv", header=T, row.names=1)
+## Locality data.
+Sites = read.csv("Tedersoo_etal_SITES_plat_pathogens.csv", header=T, row.names=1)
+```
+
+From the complete list of pathogens we retain only those that have a 95% sequence similarity match to a known fungal pathogen from the UNITE fungal ITS database. As the calculations may take a while with the full data set, we only keep the most abundant OTUs (this case those with a total abundance above twice the mean).
+
+```{r FilterData, cache=TRUE}
+## filter the OTUs according to similarity to UNITE species hypotheses (95%)
+Otu.95 = Otu[Otu$similarity >= 0.95,]
+## filter OTU table for over 95% SH similarity OTUs
+Abund.95 = Abund[rownames(Abund)%in%rownames(Otu.95),]
+Abund.95 = data.frame(t(Abund.95)) # transpose OTU abundance table: samples in rows, OTUs in columns
+
+patho.TotCount = apply(Abund.95,2,sum)
+IsAbund = patho.TotCount > 2*mean(patho.TotCount)
+patho.some = Abund.95[,IsAbund]
+
+## sites with non-singleton pathogen observations
+sites.patho <- rownames(patho.some)[apply(patho.some,1,sum)>0]
+## retain only sites that had pathogen observtions
+patho.some <- patho.some[rownames(patho.some)%in%sites.patho,]
+## remove non-present OTUs
+Otu.95 <- Otu.95[rownames(Otu.95)%in%colnames(patho.some),]
+## keep only localities where pathogens were found
+Sites.95 <- Sites[rownames(Sites)%in%rownames(patho.some),]
+```
+
+We can look at the abundance distribution of the sequence counts:
+
+```{r Abundance, cache=TRUE, echo=TRUE}
+some.TotCount = apply(patho.some,2,sum)
+
+# par(mfrow=c(1,3), mar=c(4,4,3,1))
+hist(some.TotCount, xlab="Abundance of OTUs (DNA reads)", 
+     main="Abundance distribution", col="grey")
+```
+
+We can also look at the mean-variance relationship:
+
+```{r MeanVarPLot, cache=TRUE, echo=TRUE, fig.height=4}
+
+par(mfrow=c(1,2), mar=c(4,4,3,1))
+## Mean-variance relationships of sequence counts
+plot(0.1,0.1, type="n", xlim=c(0.1,5), ylim=c(0.1, max(apply(patho.some,2,var))), xlab="Mean", ylab="Variance") # ann=FALSE, 
+  points(apply(patho.some,2,mean), apply(patho.some,2,var), pch=20)
+  title(main="Untransformed data")
+
+## log(x+1)
+plot(0.1,0.1, type="n", xlim=c(0.01,1), ylim=c(0.05,
+                                               max(apply(log(patho.some+1),2,var))), 
+     xlab="Mean (log scale)", ylab="Variance (log scale)")
+  points(apply(log(patho.some+1),2,mean), apply(log(patho.some+1),2,var), pch=20)
+  title(main="log(x+1)")
+
+```
+
+## Variable selection
+
+@tedersoo_global_2014 indicate that fungal richness in generally is globally influenced by mean annual precipitation (MAP) and soil Ca concentration. Plant pathogens are specifically influenced by the distance from the equator, and the soil carbon-nitrogen ratio. We retain these for model-based selection in addition to the sequencing depth differences which likely influence species abundances, and add up biome type as an additional variable.
+
+We can fit a multiple GLM to the data (@wang_mvabund_2012), drop each term and look at how that affects the model fit.
+
+```{r FitManyGLM, cache=TRUE, echo=TRUE}
+# Create input matrix for multispecies abundance model
+vars.presel <- data.frame(MAP = Sites.95$MAP, C_N = Sites.95$C_N, 
+                         Ca = Sites.95$LogCa, lat = Sites.95$Lat,
+                         seq.depth = Sites.95$allseq, biome=Sites.95$Biome)
+rownames(vars.presel) <- rownames(Sites.95)
+
+## input matrix for multispecies abundance model
+patho.mvabund = mvabund(patho.some)
+
+## model fit
+patho.m1 <- manyglm(patho.mvabund ~ seq.depth + biome + MAP + lat + C_N + Ca, 
+                   data=vars.presel, family = "negative.binomial")
+
+## Check what terms have an effect
+TestTerms <- drop1(patho.m1, test="Chisq")
+knitr::kable(TestTerms)
+```
+
+This suggests that all variables have an effect. We can see below that the correlations between them are weak, so it makes sense to fit the full model.
+
+```{r CorrPlot, cache=TRUE, echo=TRUE}
+cor.var = cor(vars.presel[,1:5])
+corrplot(cor.var, method="circle", tl.pos="lt", type="full",        
+         tl.col="black", tl.srt=45, cl.ratio=0.1,
+         addCoef.col="black", order="hclust", hclust.method = c("complete"),
+         p.mat = 1-abs(cor.var), sig.level=0.70, insig = "blank")
+```
+
+The model diagnostics indicate good fit:
+
+```{r Diagnostics, cache=TRUE, echo=TRUE, fig.height=7, fig.width=10}
+plot(patho.m1, which=c(1:3))
+```
+
+## Contribution of variables to the observed variation.
+We retain species-specific tests after adjusting for multiple comparisons. The ANOVA is sensitive to predictor order, which is more of a problem if predictors are correlated. Increase nBoot for more precision in statistical significance.
+
+```{r ANOVA, cache=TRUE, echo=TRUE}
+NBoot <- 5
+patho.anova.time <- system.time(
+  patho.anova <- anova(patho.m1, resamp = "montecarlo", nBoot = NBoot, test="LR", p.uni="adjusted")
+)
+knitr::kable(patho.anova$table, digits=2)
+```
+
+The code takes about `r round(patho.anova.time[3]/60)` minutes with `r NBoot` bootstraps. It shows that most variation is explained by MAP and C_N ratios.
+
+The summary statistics separately tests the importance of each predictor. These are not sensitive to predictor order. 
+
+```{r Summary, cache=TRUE, echo=TRUE}
+# # This throws an error:
+# patho.summary <- summary(patho.m1, resamp = "montecarlo", nBoot = 50, test="LR", p.uni="adjusted")
+patho.summ.time <- system.time(patho.summary <- summary(patho.m1, resamp = "montecarlo", nBoot = NBoot, test="LR")) # works
+
+## results of likelihood ratio tests
+knitr::kable(patho.summary$coefficients)
+```
+
+This took about `r round(patho.summ.time[3]/60)` minutes with `r NBoot` bootstraps. Note that the minimum p-value is about `r round(1/NBoot,3)`.
+
+
+## Model-based unconstrained ordination. 
+
+We can do model-based ordination (see @hui_model-based_2015). This is done by fitting a model with latent variables to model the correlations. These then act as ordination axes. We fit the model and then first check the diagnostics
+
+```{r Ordination, cache=TRUE, echo=TRUE}
+pathord.m <- boral(patho.some, family = "negative.binomial", num.lv = 2, n.burnin = 10,
+                   n.iteration = 100, n.thin = 1)
+
+## model diagnostics
+plot(pathord.m, ask = FALSE, mfrow = c(2,2))
+```
+
+We can compare the results with a classical NMDS. First we fit it. We have supressed the messages as there are too many and they are too stressful.
+
+```{r NMDS, cache=TRUE, echo=TRUE, message=FALSE}
+## Latent variable ordination in comparison with NMDS
+## site ordination: plant pathogens seem to be influenced by the biome
+MDS.patho <- metaMDS(patho.some, trace=0)
+MDS.patho <- metaMDS(patho.some, previous = MDS.patho, trace=0)
+```
+
+And then plot the ordiantions.
+
+```{r PlotBiplots, cache=TRUE, echo=TRUE, message=FALSE, fig.width=12, fig.height=6}
+palette(colors())
+par(mfrow=c(1,2), mar=c(2.5,2.5,3,1), oma=c(2,2,0,0))
+# Plot LVs
+plot(pathord.m$lv.median, col=77+as.numeric(Sites.95$Biome), 
+     pch=19, xlim =c(-2,4), main="Latent variable model", las=1)
+legend(1.3,-0.5, legend = levels(Sites.95$Biome), cex = .5, pch=19,
+       col=77+c(1:11), bty = "n")
+ 
+## plot NMDS
+plot(MDS.patho$points, xlab="NMDS1", ylab="NMDS2", 
+    col=77+as.numeric(Sites.95$Biome), pch=19, main = "NMDS plot", las=1)
+mtext("First axis", 1, outer=TRUE)
+mtext("Second axis", 2, outer=TRUE)
+
+```
+

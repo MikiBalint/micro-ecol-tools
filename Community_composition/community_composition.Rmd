@@ -5,7 +5,8 @@ date: '`r format(Sys.time(), "%d %B, %Y")`'
 output: word_document
 bibliography: community_composition.bib
 ---
-
+## the data is here:
+## https://figshare.com/s/293506ffb9d2f8f9de3a
 
 ## Initial steps: read in the data, and check that it is sane.
 

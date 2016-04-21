@@ -1,0 +1,262 @@
+---
+title: "FEMs Results"
+author: "Bob O'Hara"
+date: '`r format(Sys.time(), "%d %B, %Y")`'
+output: html_document
+references:
+- DOI: 10.1093/biomet/asr013
+  URL: http://biomet.oxfordjournals.org/cgi/doi/10.1093/biomet/asr013
+  author:
+  - family: Bhattacharya
+    given: A.
+  - family: Dunson
+    given: D. B.
+  container-title: Biometrika
+  id: Bhattacharya2011
+  issue: 2
+  issued:
+    month: 5
+    year: 2011
+  page: 291--306
+  title: Sparse Bayesian infinite factor models
+  type: article-journal
+  volume: 98
+---
+
+## The Data
+
+## the data is here:
+## https://figshare.com/s/293506ffb9d2f8f9de3a
+
+The data come from 16S rRNA pyrosequencing reads, obtained from water samples taken monthly for several years. Each sample is the frequency of reads of an operational taxonomic units.
+
+First, we read in the data, and extract the pseudo-species that are persent in all samples, for the analysis. The data is formatted into a list that BUGS (or JAGS) can read.
+
+```{r ReadData, echo=TRUE}
+library(runjags)
+
+dat <- read.table("guest_1426605457_UN.TaxByRefExport.txt", header=TRUE, sep="\t", fill=TRUE)
+
+# Get columns of abundance data, removing repeat dates
+AbundCols <- grep("^ICM.*(Np$|[0-9]$)", names(dat))
+
+# Extract 'species' present in all samples
+NPres <- apply(dat[,AbundCols],1, function(vec) sum(vec>0))
+Abunds <- as.matrix(dat[NPres==max(NPres), AbundCols])
+
+# Extract dates, then sort by date
+Dates.tmp <- strsplit(colnames(Abunds), "_")
+Dates <- ISOdate(
+  year=unlist(lapply(Dates.tmp, function(lst) lst[6])),
+  month=unlist(lapply(Dates.tmp, function(lst) lst[7])),
+  day=unlist(lapply(Dates.tmp, function(lst) lst[8]))
+)
+Abunds <- Abunds[,order(Dates)]
+Dates <- Dates[order(Dates)]
+
+# Create BUGS data list
+DataToBUGS <- list(
+#  Rho=diag(1, nrow(Abunds))
+  NLatent  = 15, # maximum number of latent variables: this is too big, but the model shrinks it down
+  NMonths=ncol(Abunds),
+  NSpecies=nrow(Abunds),
+  N=apply(dat[, AbundCols], 2, sum),
+  y=Abunds
+)
+```
+
+## The Model
+
+We assume that the process model is a Gompertz model, so if $y_i(t)$ is the log abundance of genotype $i$ at time $t$, then 
+
+$$
+y_i(t) = y_i(t-1)  + r_i (1 - \frac{ {\sum \alpha_{ij} y_j(t-1)}}{k_i}) + \varepsilon_i(t)
+$$
+
+where $r_i$ is the growth rate, $k_i$ is the carrying capacity, $\alpha_{ij}$ is the effect of genotype $j$ on genotype $i$, and $\varepsilon_i(t)$ is the environmental stochasticity, which we assume is correlated across species, i.e. $\varepsilon_i(t) \sim MVN(0, V)$ where $V$ is a covariance matrix.
+
+Because $\Sigma$ can be large, we reduce its size using a sparse factor model [@Bhattacharya2011]: in essence we add some regression terms
+
+$$
+y_i(t) = y_i(t-1)  + r_i (1 - \frac{ {\sum \alpha_{ij} y_j(t-1)}}{k_i})  + \sum \lambda_{il} z_{lt} + \epsilon_i(t) 
+$$
+
+where now $\epsilon_i(t) \sim N(0, \sigma^2_i)$, i.e. is independent between species (and we can write $\Sigma=diag(\sigma^2_i)$, and the correlations are modelled through the latent factors, $z_{lt}$, and their relationships to each species, through the matrix of factor loadings, $\Lambda = \{\lambda_{il}\}$. We assume $z_{lt}~N(0,1)$, so that the correlation matrix becomes $V = \Lambda {\Lambda}^T + \Sigma$. This could become large if there is a large number of factors, but we use the approach of [@Bhattacharya2011] to make successive factors have smaller and smaller variances, i.e. they are made to shrink towards zero as the index $l$ increases.
+
+For an observation model we assume that differences in overall abundance are mainly due to sampling efficiency, so if we observe $N_i(t)$ reads of sequence $i$ at time $t$ then we assume 
+
+$$
+N_i(t) \sim Poisson(\lambda_i(t))
+$$
+and
+$$
+log(\lambda_i(t)) = y_i(t) + log(M(t)) + \phi(t)
+$$
+where $M(t)$ is the total number of reads, and $\phi(t)$ is a second factor to take the variation in abundance into account.
+
+### Priors
+
+We assume hierarchical models for $r$ and $k$, i.e. $r \sim N(\mu_r, \sigma_r^2)$ and $k \sim N(\mu_k, \sigma_k^2)$. We should probably do the same for $\phi(t)$.
+
+We set $\alpha_{i,i}=1$, and for $i \neq j$ use SSVS to model the coefficients: 
+
+$\alpha_{i,i} \sim N(0, \tau_{0} (1-I_{i,j}) + \tau_{1}I_{i,j})$
+
+where $\tau_{0}=10^{-4}$ and $\tau_{0}=1$. this is a 'slab and spike' prior: if $I_{i,j}=0$ then the variance is $10^{-4}$, i.e. small, so the parameter is pretty much zero. If $I_{i,j}=1$ then the variance is 1, so the parameter can be estimated fairly freely (note that a value of 1 would mean that intra- and inter-specific competition would be of equal strength).
+
+# Running the Model
+
+As a preliminary step, we need some initial values. This is the function, but not every set of inits works, so for the runs I simulated 10 and tried tehm to see if they were stable. 
+
+```{r Inits}
+# Function to simulate initial values
+SimInits <- function(dat, MV=TRUE) {
+  init <- list( 
+    alpha = diag(NA, dat$NSpecies), # [31,30]
+    g.alpha = diag(NA, dat$NSpecies), # [31,30]
+    k = apply(log(dat$y), 1, mean), # [31]
+    mu = t(log(dat$y)), # [58,31]
+    r = rnorm(dat$NSpecies, 0.6,0.1) # [31]
+  )
+  if(MV) {
+    init$tau = diag(rgamma(dat$NSpecies,100,100), dat$NSpecies) # [31,31]
+  } else {
+    init$sd = rgamma(dat$NSpecies,100,100)
+  }
+  init
+}
+Inits.notuse <- replicate(2, SimInits(DataToBUGS, MV=TRUE), simplify=FALSE)
+
+# Read in the initial values I actually used
+load(file="NewInits.RData")
+NewInits <- c(NewInits, NewInits2)
+# Only these chains worked, so drop the rest
+NewInits <- NewInits[c(2:4,6:8,10)]
+
+# Add latent variable initial values to previous inits
+NewInitsLV <- lapply(NewInits, function(lst, TMax, NLat) {
+  lst$muN <- c(NA, rep(0,TMax-1))
+  lst$sd <- rep(1, length(lst$r))
+  lst$Invk <- 1/pmax(0.00001, lst$k)
+  lst$Sigma <- NULL
+  lst$k <- NULL
+  lst$tau <- NULL
+  lst$LatentSTAR <- matrix(0, nrow=TMax, ncol=NLat)
+  lamSpSTAR <- matrix(0, nrow=length(lst$r), ncol=NLat)
+  lst
+}, TMax=DataToBUGS$NMonths, NLat=DataToBUGS$NLatent)
+
+# add RNG seeds, to stop runjags giving an irritating warning
+NewInitsLV <- lapply(1:length(NewInitsLV), function(sd, NI) {
+  NI[[sd]]$.RNG.name="base::Mersenne-Twister"
+  NI[[sd]]$.RNG.seed=sd; 
+  NI[[sd]]
+}, NI=NewInitsLV)
+```
+
+We can now fit the model. The code here is an example, because the full run takes a long time. As long as it doesn't give an error, feel happy.
+
+```{r RunTestModel, message=FALSE}
+AllVars <- c("r","k", "g.alpha", "alpha", "sd", "Corr")
+NChains <- 2 # number of chains
+
+Model.test <- run.jags(model="TimeSeriesModel.bug", monitor=c("r","k"), 
+          data=DataToBUGS, n.chains=NChains, inits=NewInitsLV[1:NChains], method="parallel", 
+          adapt=1e2, burnin=1e1, sample=1e2, thin=1)
+Model.test.mcmc <- Model.test$mcmc
+
+#     This is the full run. Don't do it unless you want to wait a few days...
+# Model.res <- run.jags(model="TimeSeriesModel.bug", monitor=AllVars, 
+#             data=DataToBUGSlv, n.chains=length(NewInitsLV), inits=NewInitsLV, 
+#             method="parallel", adapt=1e6, burnin=5e5, sample=1e4, thin=50)
+# Model.mcmc <- Model.res$mcmc # only keep chains, not other stats
+# save(Model.mcmc, file="mvmodInfFactorsRes.RData")
+#  Summ <- summary(Model.mcmc) # only save the summary statistics of the model, to save space
+# save(Summ, file="mvmodInfFactorsSumm.RData")
+# plot(Model.res, file="ModelRes.pdf") # Plot the histories etc, to check for convergence
+
+# rather than run the code above, just load in some pre-prepared summary statistics:
+load("mvmodInfFactorsSumm.RData")
+```
+
+# Results
+
+First we calculate the raw correlations in the data, and then create a graph showing which corelations are larger than 0.5 (which is an arbitrary cut-off, but we've got to use something).
+
+```{r RawCorrs, echo=TRUE, message=FALSE}
+library(igraph)
+
+# estimate graph of raw correlations from data
+
+RelAbund <- sweep(t(DataToBUGS$y), 1, apply(DataToBUGS$y,2,sum), "/")
+Corrs.raw <- cor(RelAbund)
+rownames(Corrs.raw) <- colnames(Corrs.raw) <- 1:nrow(Corrs.raw)
+Corrs.raw1 <- Corrs.raw 
+  Corrs.raw1[abs(Corrs.raw)<0.5] <- 0
+  diag(Corrs.raw1) <- 0; 
+Corr.raw.graph <- graph.adjacency(abs(Corrs.raw1), weighted=TRUE, diag=FALSE, mode="undirected")
+Upper.Corr.raw <- Corrs.raw1[upper.tri(Corrs.raw1, diag=FALSE)]
+
+```
+
+Next, extract the residual correlations, again keeping those with $|\rho|>0.5$.
+
+```{r ResidCorrs, echo=TRUE, message=FALSE}
+# create graph of residual correlations
+Corr.resid.mat <- matrix(Summ$quantiles[grep("^Corr",rownames(Summ$quantiles)),"50%"], nrow=31)
+Corr.resid.mat1 <- Corr.resid.mat
+  Corr.resid.mat1[abs(Corr.resid.mat1)<0.5] <- 0
+  diag(Corr.resid.mat1) <- 0; 
+Corr.resid.graph <- graph.adjacency(Corr.resid.mat1, weighted=TRUE, diag=FALSE, mode="undirected")
+Upper.Corr.resid <- Corr.resid.mat1[upper.tri(Corr.resid.mat1, diag=FALSE)]
+
+```
+
+Finally, the competition parameters for which the Bayes factor is larger than 3. This means calculating the Bayes Factor first, of course.
+
+```{r AR1s, echo=TRUE, message=FALSE}
+# Create graph of Bayes factors for VAR(1) terms
+Prior.g <- 0.2
+Thresh.bf <- 3 # threhold for Bayes Factors: 3-20 is positive, 20-150 is strong.
+g.mat <- matrix(Summ$statistics[grep("^g.alpha",rownames(Summ$statistics)),"Mean"], nrow=31)
+bf.mat <- g.mat*(1-Prior.g)/((1-g.mat)*Prior.g); diag(bf.mat) <- 0
+bf.mat2 <- bf.mat; bf.mat2[bf.mat<Thresh.bf] <- 0
+bf.graph <- graph.adjacency(bf.mat2, mode="directed", weighted=TRUE, diag=FALSE)
+
+# Create graph of VAR(1) terms
+alpha.mat <- matrix(Summ$statistics[grep("^alpha",rownames(Summ$statistics)),"Mean"], nrow=31)
+alpha.mat1 <- alpha.mat; alpha.mat1[bf.mat<Thresh.bf] <- 0
+alpha.graph <- graph.adjacency(abs(alpha.mat1), mode="directed", weighted=TRUE, diag=FALSE)
+```
+Having done that, we can plot the correlations and interactions. We can see from the figure below that (a) although the raw correlations are both positive and negative, almost all residual correlations are positive (only `r sum(Corr.resid.mat1< -0.2)` in the graph are negative), (b) all interspecific interactions are one way, (c) most (i.e. all but `r sum(alpha.mat1[bf.mat>Thresh.bf]>0)` out of `r sum(bf.mat>Thresh.bf)`) interactions are negative, and (d) there seems to be little relationship between the different coefficients.
+
+```{r CorrsPlots, echo=TRUE, fig.width=7, fig.height=3, fig.cap="Correlations between species: black=positive effect, red=negative"}
+# Plot graphs
+par(mfrow=c(1,3), mar=c(1,1,3,1))
+plot(Corr.raw.graph, edge.width=E(Corr.raw.graph)$weight*4, layout=layout.circle, 
+     edge.color=1+(Upper.Corr.raw[abs(Upper.Corr.raw)>0.45]<0), 
+     main="Correlations\nin Data > 0.5")
+plot(alpha.graph, edge.width=E(alpha.graph)$weight*10, layout=layout.circle, edge.curved=0.1, 
+     edge.color=1+(alpha.mat1[bf.mat>Thresh.bf]<0), 
+     main="Interspecific interactions\nwith Bayes Facfor > 3")
+plot(Corr.resid.graph, edge.width=E(Corr.resid.graph)$weight*4, layout=layout.circle, 
+     edge.color=1+(Upper.Corr.resid[abs(Upper.Corr.resid)>0.45]<0), 
+     main="Correlation in\nresidual variation > 0.5")
+```
+
+Point (d) is actually wrong: we can plot the correlations against each other. The raw correlations aren't correlated with the interaction effects (the correlation between them is `r round(cor(c(Corrs.raw+diag(NA,nrow(Corrs.raw))), c(bf.mat), use="complete.obs"),2)`), but they are correlated with the residual correlations, $\rho=$ `r round(cor(c(Corrs.raw+diag(NA,nrow(Corrs.raw))), c(Corr.resid.mat), use="complete.obs"),2)`). If we plot the raw and residual correlations, we see that quite a pairs of species haveonly one of the correlations being large enough, so the pattern is obscured a bit.
+
+```{r PlotCorrsInCorrs, echo=TRUE, warning=FALSE, fig.cap="Pairwise plots of correlations and interactions between species: correlations below the diagonal. Interactions close to zero (i.e. |\alpha|<0.01) removed"}
+
+# use  matrice of correlations
+#   + diag(NA,) removes leading diagonal
+plot(c(Corrs.raw+diag(NA,nrow(Corrs.raw))), Corr.resid.mat, xlim=c(-1,1), ylim=c(-1,1), xaxs="i", yaxs="i",
+     xlab="Raw correlation", ylab="Residual correlation")
+ rect(-1,0.5,1,1, col=rgb(0.3,0,0,alpha=0.1), border=NA)
+ rect(0.5,-1,1,1, col=rgb(0.3,0,0,alpha=0.1), border=NA)
+ rect(-1,-0.5,0.5,-1, col=rgb(0.3,0,0,alpha=0.1), border=NA)
+ rect(-0.5,-1,-1,0.5, col=rgb(0.3,0,0,alpha=0.1), border=NA)
+
+```
+
+## References

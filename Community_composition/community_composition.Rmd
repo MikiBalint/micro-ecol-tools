@@ -37,14 +37,17 @@ Otu.95 = Otu[Otu$similarity >= 0.95,]
 Abund.95 = Abund[rownames(Abund)%in%rownames(Otu.95),]
 Abund.95 = data.frame(t(Abund.95)) # transpose OTU abundance table: samples in rows, OTUs in columns
 
-patho.TotCount = apply(Abund.95,2,sum)
-IsAbund = patho.TotCount > 2*mean(patho.TotCount)
-patho.some = Abund.95[,IsAbund]
+# remove doubleton OTUs. Singletons were removed during the sequence cleanup from the dataset.
+Abund.95.NoDouble = Abund.95[,which(vegan::specnumber(Abund.95,MARGIN=2)>2)]
 
-## sites with non-singleton pathogen observations
-sites.patho <- rownames(patho.some)[apply(patho.some,1,sum)>0]
+patho.TotCount = apply(Abund.95.NoDouble,2,sum)
+IsAbund = patho.TotCount > 2*mean(patho.TotCount)
+patho.some = Abund.95.NoDouble[,IsAbund]
+
 ## retain only sites that had pathogen observtions
+sites.patho <- rownames(patho.some)[apply(patho.some,1,sum)>0]
 patho.some <- patho.some[rownames(patho.some)%in%sites.patho,]
+
 ## remove non-present OTUs
 Otu.95 <- Otu.95[rownames(Otu.95)%in%colnames(patho.some),]
 ## keep only localities where pathogens were found
@@ -125,7 +128,7 @@ plot(patho.m1, which=c(1:3))
 We retain species-specific tests after adjusting for multiple comparisons. The ANOVA is sensitive to predictor order, which is more of a problem if predictors are correlated. Increase nBoot for more precision in statistical significance.
 
 ```{r ANOVA, cache=TRUE, echo=TRUE}
-NBoot <- 5
+NBoot <- 10
 patho.anova.time <- system.time(
   patho.anova <- anova(patho.m1, resamp = "montecarlo", nBoot = NBoot, test="LR", p.uni="adjusted")
 )
@@ -153,8 +156,7 @@ This took about `r round(patho.summ.time[3]/60)` minutes with `r NBoot` bootstra
 We can do model-based ordination (see @hui_model-based_2015). This is done by fitting a model with latent variables to model the correlations. These then act as ordination axes. We fit the model and then first check the diagnostics
 
 ```{r Ordination, cache=TRUE, echo=TRUE}
-pathord.m <- boral(patho.some, family = "negative.binomial", num.lv = 2, n.burnin = 10,
-                   n.iteration = 100, n.thin = 1)
+pathord.m <- boral(patho.some, family = "negative.binomial", num.lv = 2, n.burnin = 10, n.iteration = 100, n.thin = 1)
 
 ## model diagnostics
 plot(pathord.m, ask = FALSE, mfrow = c(2,2))
@@ -167,6 +169,9 @@ We can compare the results with a classical NMDS. First we fit it. We have supre
 ## site ordination: plant pathogens seem to be influenced by the biome
 MDS.patho <- metaMDS(patho.some, trace=0)
 MDS.patho <- metaMDS(patho.some, previous = MDS.patho, trace=0)
+
+# NMDS stressplot:
+stressplot(MDS.patho)
 ```
 
 And then plot the ordiantions.

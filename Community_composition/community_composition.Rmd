@@ -82,7 +82,7 @@ plot(0.1,0.1, type="n", xlim=c(0.01,1), ylim=c(0.05,
 
 ## Variable selection
 
-@tedersoo_global_2014 indicate that fungal richness in generally is globally influenced by mean annual precipitation (MAP) and soil Ca concentration. Plant pathogens are specifically influenced by the distance from the equator, and the soil carbon-nitrogen ratio. We retain these for model-based selection in addition to the sequencing depth differences which likely influence species abundances, and add up biome type as an additional variable.
+@tedersoo_global_2014 indicate that fungal richness in general is globally influenced by mean annual precipitation (MAP) and soil Ca concentration. Plant pathogens are specifically influenced by the distance from the equator, and the soil carbon-nitrogen ratio. We retain these for model-based selection in addition to the sequencing depth differences which likely influence species abundances, and add up biome type as an additional variable.
 
 We can fit a multiple GLM to the data (@wang_mvabund_2012), drop each term and look at how that affects the model fit.
 
@@ -132,7 +132,7 @@ patho.anova.time <- system.time(
 knitr::kable(patho.anova$table, digits=2)
 ```
 
-The code takes about `r round(patho.anova.time[3]/60)` minutes with `r NBoot` bootstraps. It shows that most variation is explained by MAP and C_N ratios.
+The code takes about `r round(patho.anova.time[3]/60)` minutes with `r NBoot` bootstraps. It shows that most variation is explained by biome, and C_N ratios.
 
 The summary statistics separately tests the importance of each predictor. These are not sensitive to predictor order. 
 

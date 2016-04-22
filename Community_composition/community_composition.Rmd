@@ -20,7 +20,6 @@ library(mvabund)
 library(boral)
 library(corrplot)
 
-## Some extra code
 ## OTU matrix
 Abund = read.csv("Tedersoo_etal_ABUNDANCES_plant_pathogens.csv", header=T, row.names=1)
 ## OTU annotations

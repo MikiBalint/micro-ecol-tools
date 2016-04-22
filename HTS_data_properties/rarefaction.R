@@ -59,15 +59,29 @@ m2.summary = summary(m2, nBoot = 100, test="LR", p.uni = "adjusted")
 m2.summary$uni.p
 
 # differential observation depth will be random poisson noise
-species2 = data.frame(apply(species, 2, function(x) x + )
-
-# read distribution in the samples
-ObsDiff = apply(species2,1,sum)
-summary(ObsDiff)
+ObsDiff = rpois(100, lambda = 1.5)*1000+500
 hist(ObsDiff)
 
-# corrected models
-sp2.mva = mvabund(species2)
+# A part of the bias is added only if the species is observed in a sample.
+species2 = as.data.frame(matrix(0, nrow=100,ncol=20))
+colnames(species2) = colnames(species)
+
+# The replacement solution from here:
+# http://stackoverflow.com/questions/8214303/conditional-replacement-of-values-in-a-data-frame
+species2[,1][species[,1] != 0] <- species[,1][species[,1] != 0] + ObsDiff[species[,1] != 0]/20
+
+cbind(species$X1, species2$X1, ObsDiff/20)
+plot(species$X1, species2$X1)
+
+# replace all
+for (i in 1:20) {
+  species2[,i][species[,i] != 0] <- species[,i][species[,i] != 0] + ObsDiff[species[,i] != 0]/20
+}
+
+# some more controls
+cbind(species$X11, species2$X11, ObsDiff/20)
+plot(species$X11, species2$X11)
+  
 
 mc1 = manyglm(sp2.mva ~ locs + I(locs^2), family = "negative.binomial")
 mc1.summary = summary(mc1, nBoot = 50, test="LR", p.uni = "adjusted")
@@ -80,3 +94,4 @@ cbind(coef(m2)["locs",],coef(mc1)["locs",])
 mc2 = manyglm(sp2.mva ~ ObsDiff + locs + I(locs^2), family = "negative.binomial")
 anova(mc1, mc2, nBoot=50)
 mc2.summary = summary(mc2, nBoot = 50, test="LR", p.uni = "adjusted")
+                      

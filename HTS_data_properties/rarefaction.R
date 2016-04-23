@@ -59,7 +59,7 @@ m2.summary = summary(m2, nBoot = 100, test="LR", p.uni = "adjusted")
 m2.summary$uni.p
 
 # differential observation depth will be random poisson noise
-ObsDiff = rpois(100, lambda = 1.5)*1000+500
+ObsDiff = rpois(100, lambda = 2)*1000+500
 hist(ObsDiff)
 
 # A part of the bias is added only if the species is observed in a sample.
@@ -78,10 +78,15 @@ for (i in 1:20) {
   species2[,i][species[,i] != 0] <- species[,i][species[,i] != 0] + ObsDiff[species[,i] != 0]/20
 }
 
+ObsCounts = apply(species2,1,sum)
+plot(ObsCounts, ObsDiff)
+
 # some more controls
 cbind(species$X11, species2$X11, ObsDiff/20)
 plot(species$X11, species2$X11)
   
+# Models
+sp2.mva = mvabund(species2)
 
 mc1 = manyglm(sp2.mva ~ locs + I(locs^2), family = "negative.binomial")
 mc1.summary = summary(mc1, nBoot = 50, test="LR", p.uni = "adjusted")
@@ -91,7 +96,11 @@ plot(coef(m2)["locs",], coef(mc1)["locs",])
 plot(coef(m2)["I(locs^2)",], coef(mc1)["I(locs^2)",])
 cbind(coef(m2)["locs",],coef(mc1)["locs",])
 
-mc2 = manyglm(sp2.mva ~ ObsDiff + locs + I(locs^2), family = "negative.binomial")
+mc2 = manyglm(sp2.mva ~ ObsCounts + locs + I(locs^2), family = "negative.binomial")
 anova(mc1, mc2, nBoot=50)
 mc2.summary = summary(mc2, nBoot = 50, test="LR", p.uni = "adjusted")
+
+plot(coef(m2)["locs",], coef(mc2)["locs",])
+plot(coef(m2)["I(locs^2)",], coef(mc2)["I(locs^2)",])
+
                       

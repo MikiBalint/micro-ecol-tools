@@ -5,7 +5,7 @@ date: '`r format(Sys.time(), "%d %B, %Y")`'
 output: word_document
 bibliography: community_composition.bib
 ---
-## the data is here:
+## Download the data from here:
 ## https://figshare.com/s/293506ffb9d2f8f9de3a
 
 ## Initial steps: read in the data, and check that it is sane.
@@ -21,11 +21,11 @@ library(boral)
 library(corrplot)
 
 ## OTU matrix
-Abund = read.csv("Tedersoo_etal_ABUNDANCES_plant_pathogens.csv", header=T, row.names=1)
+Abund = read.csv("data/Tedersoo_etal_ABUNDANCES_plant_pathogens.csv", header=T, row.names=1)
 ## OTU annotations
-Otu = read.csv("Tedersoo_etal_OTUs_plant_pathogens.csv", header=T, row.names=1)
+Otu = read.csv("data/Tedersoo_etal_OTUs_plant_pathogens.csv", header=T, row.names=1)
 ## Locality data.
-Sites = read.csv("Tedersoo_etal_SITES_plat_pathogens.csv", header=T, row.names=1)
+Sites = read.csv("data/Tedersoo_etal_SITES_plat_pathogens.csv", header=T, row.names=1)
 ```
 
 From the complete list of pathogens we retain only those that have a 95% sequence similarity match to a known fungal pathogen from the UNITE fungal ITS database. As the calculations may take a while with the full data set, we only keep the most abundant OTUs (this case those with a total abundance above twice the mean).
@@ -37,12 +37,12 @@ Otu.95 = Otu[Otu$similarity >= 0.95,]
 Abund.95 = Abund[rownames(Abund)%in%rownames(Otu.95),]
 Abund.95 = data.frame(t(Abund.95)) # transpose OTU abundance table: samples in rows, OTUs in columns
 
-# remove doubleton OTUs. Singletons were removed during the sequence cleanup from the dataset.
+# Example command to remove doubleton OTUs. Singletons were removed during the sequence cleanup from the dataset.
 Abund.95.NoDouble = Abund.95[,which(vegan::specnumber(Abund.95,MARGIN=2)>2)]
 
-patho.TotCount = apply(Abund.95.NoDouble,2,sum)
+patho.TotCount = apply(Abund.95,2,sum)
 IsAbund = patho.TotCount > 2*mean(patho.TotCount)
-patho.some = Abund.95.NoDouble[,IsAbund]
+patho.some = Abund.95[,IsAbund]
 
 ## retain only sites that had pathogen observtions
 sites.patho <- rownames(patho.some)[apply(patho.some,1,sum)>0]
@@ -59,16 +59,17 @@ We can look at the abundance distribution of the sequence counts:
 ```{r Abundance, cache=TRUE, echo=TRUE}
 some.TotCount = apply(patho.some,2,sum)
 
-# par(mfrow=c(1,3), mar=c(4,4,3,1))
+# tiff(filename = "Fig_2.tif", width = 2*168, height = 2*70, units = "mm", 
+#      pointsize = 16, res = 600, compression = c("lzw"), type = "Xlib")
+par(mfrow=c(1,3), mar=c(6,6,6,3))
 hist(some.TotCount, xlab="Abundance of OTUs (DNA reads)", 
-     main="Abundance distribution", col="grey")
+     main="Abundance distribution", col="grey", lwd=1.5)
 ```
 
 We can also look at the mean-variance relationship:
 
 ```{r MeanVarPLot, cache=TRUE, echo=TRUE, fig.height=4}
 
-par(mfrow=c(1,2), mar=c(4,4,3,1))
 ## Mean-variance relationships of sequence counts
 plot(0.1,0.1, type="n", xlim=c(0.1,5), ylim=c(0.1, max(apply(patho.some,2,var))), xlab="Mean", ylab="Variance") # ann=FALSE, 
   points(apply(patho.some,2,mean), apply(patho.some,2,var), pch=20)
@@ -80,7 +81,8 @@ plot(0.1,0.1, type="n", xlim=c(0.01,1), ylim=c(0.05,
      xlab="Mean (log scale)", ylab="Variance (log scale)")
   points(apply(log(patho.some+1),2,mean), apply(log(patho.some+1),2,var), pch=20)
   title(main="log(x+1)")
-
+# dev.off()
+  
 ```
 
 ## Variable selection
@@ -125,12 +127,12 @@ plot(patho.m1, which=c(1:3))
 ```
 
 ## Contribution of variables to the observed variation.
-We retain species-specific tests after adjusting for multiple comparisons. The ANOVA is sensitive to predictor order, which is more of a problem if predictors are correlated. Increase nBoot for more precision in statistical significance.
+We retain species-specific tests after adjusting for multiple comparisons. The ANOVA is sensitive to predictor order, which is more of a problem if predictors are correlated. Increase nBoot for more precision in statistical significance (and for more computation time, default: 1000).
 
 ```{r ANOVA, cache=TRUE, echo=TRUE}
 NBoot <- 10
 patho.anova.time <- system.time(
-  patho.anova <- anova(patho.m1, resamp = "montecarlo", nBoot = NBoot, test="LR", p.uni="adjusted")
+  patho.anova <- anova(patho.m1, resamp = "pit.trap", nBoot = NBoot, test="LR", p.uni="adjusted")
 )
 knitr::kable(patho.anova$table, digits=2)
 ```
@@ -142,7 +144,7 @@ The summary statistics separately tests the importance of each predictor. These 
 ```{r Summary, cache=TRUE, echo=TRUE}
 # # This throws an error:
 # patho.summary <- summary(patho.m1, resamp = "montecarlo", nBoot = 50, test="LR", p.uni="adjusted")
-patho.summ.time <- system.time(patho.summary <- summary(patho.m1, resamp = "montecarlo", nBoot = NBoot, test="LR")) # works
+patho.summ.time <- system.time(patho.summary <- summary(patho.m1, resamp = "pit.trap", nBoot = NBoot, test="LR")) # works
 
 ## results of likelihood ratio tests
 knitr::kable(patho.summary$coefficients)
@@ -177,19 +179,23 @@ stressplot(MDS.patho)
 And then plot the ordiantions.
 
 ```{r PlotBiplots, cache=TRUE, echo=TRUE, message=FALSE, fig.width=12, fig.height=6}
+
+tiff(filename = "Fig_3.tif", width = 2*114, height = 2*70, units = "mm", 
+     pointsize = 16, res = 600, compression = c("lzw"), type = "Xlib")
 palette(colors())
 par(mfrow=c(1,2), mar=c(2.5,2.5,3,1), oma=c(2,2,0,0))
 # Plot LVs
 plot(pathord.m$lv.median, col=77+as.numeric(Sites.95$Biome), 
-     pch=19, xlim =c(-2,4), main="Latent variable model", las=1)
-legend(1.3,-0.5, legend = levels(Sites.95$Biome), cex = .5, pch=19,
-       col=77+c(1:11), bty = "n")
- 
+     pch=19, main="Latent variable model", las=1)
+
 ## plot NMDS
 plot(MDS.patho$points, xlab="NMDS1", ylab="NMDS2", 
     col=77+as.numeric(Sites.95$Biome), pch=19, main = "NMDS plot", las=1)
 mtext("First axis", 1, outer=TRUE)
 mtext("Second axis", 2, outer=TRUE)
+legend(-0.04,0.52, legend = levels(Sites.95$Biome), cex = .5, pch=19,
+       col=77+c(1:11), bty = "n")
+dev.off()
 
 ```
 

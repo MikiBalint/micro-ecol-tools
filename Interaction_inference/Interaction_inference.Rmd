@@ -25,7 +25,7 @@ references:
 
 ## The Data
 
-## the data is here:
+## Download the data from here:
 ## https://figshare.com/s/293506ffb9d2f8f9de3a
 
 The data come from 16S rRNA pyrosequencing reads, obtained from water samples taken monthly for several years. Each sample is the frequency of reads of an operational taxonomic units.
@@ -35,7 +35,7 @@ First, we read in the data, and extract the pseudo-species that are persent in a
 ```{r ReadData, echo=TRUE}
 library(runjags)
 
-dat <- read.table("guest_1426605457_UN.TaxByRefExport.txt", header=TRUE, sep="\t", fill=TRUE)
+dat <- read.table("data/guest_1426605457_UN.TaxByRefExport.csv", header=TRUE, sep="\t", fill=TRUE)
 
 # Get columns of abundance data, removing repeat dates
 AbundCols <- grep("^ICM.*(Np$|[0-9]$)", names(dat))
@@ -128,7 +128,7 @@ SimInits <- function(dat, MV=TRUE) {
 Inits.notuse <- replicate(2, SimInits(DataToBUGS, MV=TRUE), simplify=FALSE)
 
 # Read in the initial values I actually used
-load(file="NewInits.RData")
+load(file="data/NewInits.RData")
 NewInits <- c(NewInits, NewInits2)
 # Only these chains worked, so drop the rest
 NewInits <- NewInits[c(2:4,6:8,10)]
@@ -160,7 +160,7 @@ We can now fit the model. The code here is an example, because the full run take
 AllVars <- c("r","k", "g.alpha", "alpha", "sd", "Corr")
 NChains <- 2 # number of chains
 
-Model.test <- run.jags(model="TimeSeriesModel.bug", monitor=c("r","k"), 
+Model.test <- run.jags(model="data/TimeSeriesModel.bug", monitor=c("r","k"), 
           data=DataToBUGS, n.chains=NChains, inits=NewInitsLV[1:NChains], method="parallel", 
           adapt=1e2, burnin=1e1, sample=1e2, thin=1)
 Model.test.mcmc <- Model.test$mcmc
@@ -176,7 +176,7 @@ Model.test.mcmc <- Model.test$mcmc
 # plot(Model.res, file="ModelRes.pdf") # Plot the histories etc, to check for convergence
 
 # rather than run the code above, just load in some pre-prepared summary statistics:
-load("mvmodInfFactorsSumm.RData")
+load("data/mvmodInfFactorsSumm.RData")
 ```
 
 # Results
@@ -232,6 +232,8 @@ Having done that, we can plot the correlations and interactions. We can see from
 
 ```{r CorrsPlots, echo=TRUE, fig.width=7, fig.height=3, fig.cap="Correlations between species: black=positive effect, red=negative"}
 # Plot graphs
+tiff(filename = "Fig_4.tif", width = 2*168, height = 2*70, units = "mm", 
+     pointsize = 16, res = 600, compression = c("lzw"), type = "Xlib")
 par(mfrow=c(1,3), mar=c(1,1,3,1))
 plot(Corr.raw.graph, edge.width=E(Corr.raw.graph)$weight*4, layout=layout.circle, 
      edge.color=1+(Upper.Corr.raw[abs(Upper.Corr.raw)>0.45]<0), 
@@ -242,6 +244,7 @@ plot(alpha.graph, edge.width=E(alpha.graph)$weight*10, layout=layout.circle, edg
 plot(Corr.resid.graph, edge.width=E(Corr.resid.graph)$weight*4, layout=layout.circle, 
      edge.color=1+(Upper.Corr.resid[abs(Upper.Corr.resid)>0.45]<0), 
      main="Correlation in\nresidual variation > 0.5")
+dev.off()
 ```
 
 Point (d) is actually wrong: we can plot the correlations against each other. The raw correlations aren't correlated with the interaction effects (the correlation between them is `r round(cor(c(Corrs.raw+diag(NA,nrow(Corrs.raw))), c(bf.mat), use="complete.obs"),2)`), but they are correlated with the residual correlations, $\rho=$ `r round(cor(c(Corrs.raw+diag(NA,nrow(Corrs.raw))), c(Corr.resid.mat), use="complete.obs"),2)`). If we plot the raw and residual correlations, we see that quite a pairs of species haveonly one of the correlations being large enough, so the pattern is obscured a bit.

@@ -180,8 +180,8 @@ And then plot the ordiantions.
 
 ```{r PlotBiplots, cache=TRUE, echo=TRUE, message=FALSE, fig.width=12, fig.height=6}
 
-tiff(filename = "Fig_3.tif", width = 2*114, height = 2*70, units = "mm", 
-     pointsize = 16, res = 600, compression = c("lzw"), type = "Xlib")
+# tiff(filename = "Fig_3.tif", width = 2*114, height = 2*70, units = "mm", 
+#      pointsize = 16, res = 600, compression = c("lzw"), type = "Xlib")
 palette(colors())
 par(mfrow=c(1,2), mar=c(2.5,2.5,3,1), oma=c(2,2,0,0))
 # Plot LVs
@@ -195,7 +195,7 @@ mtext("First axis", 1, outer=TRUE)
 mtext("Second axis", 2, outer=TRUE)
 legend(-0.04,0.52, legend = levels(Sites.95$Biome), cex = .5, pch=19,
        col=77+c(1:11), bty = "n")
-dev.off()
+# dev.off()
 
 ```
 
